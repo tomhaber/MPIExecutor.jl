@@ -9,7 +9,8 @@ include("RemoteFunction.jl")
 
 export MPIPoolExecutor, shutdown!, @remote,
     submit!, run!, then!,
-    fulfill!, whenall!, get!
+    fulfill!, whenall!, get!,
+    run_broadcast!
 
 struct WorkUnit
     f::RemoteFunction
@@ -54,7 +55,7 @@ include("Future.jl")
 Base.size(pool::MPIPoolExecutor) = isempty(pool.slaves) ? 1 : length(pool.slaves)
 
 function shutdown!(pool::MPIPoolExecutor)
-    while length(pool.idle) != length(pool.slaves)
+    while !all_idle(pool)
         receive_any!(pool)
     end
 
@@ -91,6 +92,10 @@ function submit!(pool::MPIPoolExecutor, f::RemoteFunction, args...)
     t.fut
 end
 
+function all_idle(pool::MPIPoolExecutor)
+    length(pool.idle) == length(pool.slaves)
+end
+
 function run!(pool::MPIPoolExecutor)
     if isempty(pool.slaves) && !isempty(pool.runnable)
         todo = pop!(pool.runnable)
@@ -98,7 +103,7 @@ function run!(pool::MPIPoolExecutor)
     else
         while !isempty(pool.runnable) && !isempty(pool.idle)
             todo = pop!(pool.runnable)
-            dispatch!(pool, todo)
+            dispatch!(pool, todo, pop!(pool.idle))
         end
 
         receive_any!(pool)
@@ -126,8 +131,7 @@ function receive_any!(pool::MPIPoolExecutor)
     end
 end
 
-function dispatch!(pool::MPIPoolExecutor, work::WorkUnit)
-    worker = pop!(pool.idle)
+function dispatch!(pool::MPIPoolExecutor, work::WorkUnit, worker)
     io = IOBuffer()
 
     tracker_id = (pool.tracker += 1)
@@ -139,6 +143,20 @@ function dispatch!(pool::MPIPoolExecutor, work::WorkUnit)
     MPI.Send(io.data[1:io.size], worker, 4 + id, pool.comm)
 end
 
+function run_broadcast!(pool::MPIPoolExecutor, f::RemoteFunction, args...)
+    @assert all_idle(pool)
 
+    all_futs = Future[]
+
+    for worker in pool.idle
+        t = WorkUnit(f, args, Future(pool))
+        dispatch!(pool, t, worker)
+        push!(all_futs, t.fut)
+    end
+
+    pool.idle = []
+
+    whenall!(all_futs)
+end
 
 end # module

@@ -62,9 +62,9 @@ function get!(f::Future)
     something(f.data)
 end
 
-function whenall!(futs::Array{Future,1}, ::Type{T} = Any) where T
+function whenall!(futs::Vector{Future}, ::Type{T} = Any) where T
     n = length(futs)
-    results = Array{T, 1}(undef, n)
+    results = Vector{T}(undef, n)
     r = Future(futs[1].pool)
     function post(i::Int, val::Any)
         if n > 0 && !isa(val, Exception)
