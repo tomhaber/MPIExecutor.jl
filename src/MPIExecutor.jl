@@ -22,6 +22,8 @@ struct WorkUnit
     end
 end
 
+const slave_path = joinpath(dirname(@__FILE__), "slave.jl")
+
 mutable struct MPIPoolExecutor
     slaves::Array{Int64,1}
     idle::Array{Int64,1}
@@ -34,8 +36,6 @@ mutable struct MPIPoolExecutor
     function MPIPoolExecutor(worker_count::Int64)
         start()
         prep_stop()
-
-        slave_path = "$(join(split("$(@__FILE__)", '/')[1:end-1], "/"))/slave.jl"
 
         comm =
             if worker_count > 0
