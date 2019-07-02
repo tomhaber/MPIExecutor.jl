@@ -48,6 +48,12 @@ mutable struct MPIPoolExecutor
 
         new(slaves, copy(slaves), comm, 0, 0, WorkUnit[], Dict{Int64, WorkUnit}())
     end
+
+    function MPIPoolExecutor(comm::MPI.Comm)
+      worker_count = MPI.Comm_size(comm) - 1
+      slaves = Int64[i-1 for i in 1:worker_count]
+      new(slaves, copy(slaves), comm, 0, 0, WorkUnit[], Dict{Int64, WorkUnit}())
+    end
 end
 
 include("Future.jl")
@@ -69,8 +75,8 @@ function shutdown!(pool::MPIPoolExecutor)
     end
 end
 
-function MPIPoolExecutor(f::Function, worker_count::Int64)
-  pool = MPIPoolExecutor(worker_count)
+function MPIPoolExecutor(f::Function, args...)
+  pool = MPIPoolExecutor(args...)
 
   try
     f(pool)

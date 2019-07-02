@@ -5,6 +5,10 @@ funcs = Union{Function, Nothing}[]
 function run_slave()
     global funcs
     comm = MPI.Comm_get_parent()
+    if comm.val == MPI.COMM_NULL.val
+      comm = MPI.COMM_WORLD
+    end
+
     while true
         s = MPI.Probe(0, MPI.ANY_TAG, comm)
         count = MPI.Get_count(s, UInt8)
