@@ -31,7 +31,12 @@ function run_slave()
             tracker_id = deserialize(io)
             args = deserialize(io)
 
-            r = funcs[id](args...)
+            r = try
+              funcs[id](args...)
+            catch e
+              e
+            end
+
             io = IOBuffer()
             serialize(io, tracker_id)
             serialize(io, r)
