@@ -1,7 +1,7 @@
 
 mutable struct Future
     pool::MPIPoolExecutor
-    data::Union{Nothing, Some}
+    data::Union{Nothing, Some, Exception}
     continuation::Union{Nothing, Function}
     function Future(f::Future)
         f
@@ -44,9 +44,9 @@ end
 function fulfill!(f::Future, value::Any)
     @assert !isfulfilled(f)
 
-    f.data = Some(value)
+    f.data = !isa(value, Exception) ? Some(value) : value
     if f.continuation !== nothing
-        f.continuation(get!(f))
+        f.continuation(value)
     end
     f
 end
