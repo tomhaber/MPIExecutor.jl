@@ -8,7 +8,7 @@ include("MPIUtils.jl")
 include("RemoteFunction.jl")
 
 export MPIPoolExecutor, shutdown!, @remote,
-    submit!, run!, then!,
+    submit!, run!, run_until!, then!,
     fulfill!, whenall!, get!,
     run_broadcast!
 
@@ -111,7 +111,7 @@ function all_idle(pool::MPIPoolExecutor)
     length(pool.idle) == length(pool.slaves)
 end
 
-function run!(pool::MPIPoolExecutor)
+function run_!(pool::MPIPoolExecutor)
     if isempty(pool.slaves) && !isempty(pool.runnable)
         todo = pop!(pool.runnable)
         fulfill!(todo.fut, todo.f(todo.args...))
@@ -123,12 +123,22 @@ function run!(pool::MPIPoolExecutor)
 
         receive_any!(pool)
     end
+end
 
-    if isempty(pool.runnable) && length(pool.idle) == length(pool.slaves)
-        true
-    else
-        false
-    end
+function run!(pool::MPIPoolExecutor)
+    run_!(pool)
+
+    isempty(pool.runnable) && all_idle(pool)
+end
+
+function run_until!(pool::MPIPoolExecutor)
+  f = nothing
+
+  while f === nothing && !(all_idle(pool) && isempty(pool.runnable))
+    f = run_!(pool)
+  end
+
+  f
 end
 
 function receive_any!(pool::MPIPoolExecutor)
@@ -142,7 +152,8 @@ function receive_any!(pool::MPIPoolExecutor)
         tracker_id = deserialize(io)
         push!(pool.idle, received_from)
         fulfill!(pool.running[tracker_id].fut, deserialize(io))
-        received_from
+    else
+      nothing
     end
 end
 

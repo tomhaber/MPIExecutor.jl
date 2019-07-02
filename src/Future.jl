@@ -48,6 +48,7 @@ function fulfill!(f::Future, value::Any)
     if f.continuation !== nothing
         f.continuation(get!(f))
     end
+    f
 end
 
 function get!(f::Future)
