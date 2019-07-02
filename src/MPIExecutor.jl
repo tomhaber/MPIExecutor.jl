@@ -69,6 +69,15 @@ function shutdown!(pool::MPIPoolExecutor)
     end
 end
 
+function MPIPoolExecutor(f::Function, worker_count::Int64)
+  pool = MPIPoolExecutor(worker_count)
+
+  try
+    f(pool)
+  finally
+    shutdown!(pool)
+  end
+end
 
 function register!(pool::MPIPoolExecutor, expression::Expr)
     rid = (pool.identifier += 1)
