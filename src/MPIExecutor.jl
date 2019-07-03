@@ -62,7 +62,7 @@ Base.size(pool::MPIPoolExecutor) = isempty(pool.slaves) ? 1 : length(pool.slaves
 
 function shutdown!(pool::MPIPoolExecutor)
     while !all_idle(pool)
-        receive_any!(pool)
+        wait_any!(pool)
     end
 
     for worker in pool.slaves
@@ -111,7 +111,7 @@ function all_idle(pool::MPIPoolExecutor)
     length(pool.idle) == length(pool.slaves)
 end
 
-function run_!(pool::MPIPoolExecutor)
+function run!(pool::MPIPoolExecutor)
     if isempty(pool.slaves) && !isempty(pool.runnable)
         todo = pop!(pool.runnable)
         fulfill!(todo.fut, todo.f(todo.args...))
@@ -123,38 +123,51 @@ function run_!(pool::MPIPoolExecutor)
 
         receive_any!(pool)
     end
-end
-
-function run!(pool::MPIPoolExecutor)
-    run_!(pool)
 
     isempty(pool.runnable) && all_idle(pool)
 end
 
 function run_until!(pool::MPIPoolExecutor)
-  f = nothing
+    if isempty(pool.runnable) && all_idle(pool)
+      return nothing
+    end
 
-  while f === nothing && !(all_idle(pool) && isempty(pool.runnable))
-    f = run_!(pool)
-  end
+    if isempty(pool.slaves) && !isempty(pool.runnable)
+        todo = pop!(pool.runnable)
+        fulfill!(todo.fut, todo.f(todo.args...))
+    else
+        while !isempty(pool.runnable) && !isempty(pool.idle)
+            todo = pop!(pool.runnable)
+            dispatch!(pool, todo, pop!(pool.idle))
+        end
 
-  f
+        wait_any!(pool)
+    end
+end
+
+function handle_recv!(pool::MPIPoolExecutor, s::MPI.Status)
+    received_from = MPI.Get_source(s)
+    count = MPI.Get_count(s, UInt8)
+    recv_mesg = Array{UInt8}(undef, count)
+    MPI.Recv!(recv_mesg, received_from, 0, pool.comm)
+    io = IOBuffer(recv_mesg)
+    tracker_id = deserialize(io)
+    push!(pool.idle, received_from)
+    fulfill!(pool.running[tracker_id].fut, deserialize(io))
 end
 
 function receive_any!(pool::MPIPoolExecutor)
     result, s = MPI.Iprobe(MPI.ANY_SOURCE, 0, pool.comm)
     if result
-        received_from = MPI.Get_source(s)
-        count = MPI.Get_count(s, UInt8)
-        recv_mesg = Array{UInt8}(undef, count)
-        MPI.Recv!(recv_mesg, received_from, 0, pool.comm)
-        io = IOBuffer(recv_mesg)
-        tracker_id = deserialize(io)
-        push!(pool.idle, received_from)
-        fulfill!(pool.running[tracker_id].fut, deserialize(io))
+      handle_recv!(pool, s)
     else
       nothing
     end
+end
+
+function wait_any!(pool::MPIPoolExecutor)
+    s = MPI.Probe(MPI.ANY_SOURCE, 0, pool.comm)
+    handle_recv!(pool, s)
 end
 
 function dispatch!(pool::MPIPoolExecutor, work::WorkUnit, worker)
