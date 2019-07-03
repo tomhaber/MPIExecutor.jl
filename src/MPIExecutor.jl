@@ -185,17 +185,21 @@ end
 function run_broadcast!(pool::MPIPoolExecutor, f::RemoteFunction, args...)
     @assert all_idle(pool)
 
-    all_futs = Future[]
+    if !isempty(pool.slaves)
+      all_futs = Future[]
 
-    for worker in pool.idle
-        t = WorkUnit(f, args, Future(pool))
-        dispatch!(pool, t, worker)
-        push!(all_futs, t.fut)
+      for worker in pool.idle
+          t = WorkUnit(f, args, Future(pool))
+          dispatch!(pool, t, worker)
+          push!(all_futs, t.fut)
+      end
+
+      pool.idle = []
+
+      whenall!(all_futs)
+    else
+      Future(pool, Some(f(args...)))
     end
-
-    pool.idle = []
-
-    whenall!(all_futs)
 end
 
 end # module
