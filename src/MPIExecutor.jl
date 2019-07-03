@@ -152,11 +152,8 @@ function handle_recv!(pool::MPIPoolExecutor, s::MPI.Status)
     MPI.Recv!(recv_mesg, received_from, 0, pool.comm)
     io = IOBuffer(recv_mesg)
     tracker_id = deserialize(io)
-    v,t = deserialize(io)
     push!(pool.idle, received_from)
-    tf = @elapsed f = fulfill!(pool.running[tracker_id].fut, v)
-    println("job $t $tf")
-    f
+    fulfill!(pool.running[tracker_id].fut, deserialize(io))
 end
 
 function receive_any!(pool::MPIPoolExecutor)
@@ -169,8 +166,7 @@ function receive_any!(pool::MPIPoolExecutor)
 end
 
 function wait_any!(pool::MPIPoolExecutor)
-    t = @elapsed s = MPI.Probe(MPI.ANY_SOURCE, 0, pool.comm)
-    println("wait $t")
+    s = MPI.Probe(MPI.ANY_SOURCE, 0, pool.comm)
     handle_recv!(pool, s)
 end
 

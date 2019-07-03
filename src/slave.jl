@@ -32,7 +32,7 @@ function run_slave()
             args = deserialize(io)
 
             r = try
-              @timed funcs[id](args...)
+              funcs[id](args...)
             catch e
               e
             end
