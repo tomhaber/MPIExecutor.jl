@@ -21,7 +21,7 @@ function _then!(f::Future, continuation::Function)
 
     f.continuation = continuation
     if isfulfilled(f)
-        f.continuation(f.data)
+        f.continuation(isa(f.data, Exception) ? f.data : something(f.data))
     end
 end
 
@@ -65,18 +65,23 @@ end
 
 function whenall!(futs::Vector{Future}, ::Type{T} = Any) where T
     n = length(futs)
+    @assert n > 0
+
     results = Vector{T}(undef, n)
     r = Future(futs[1].pool)
     function post(i::Int, val::Any)
-        if n > 0 && !isa(val, Exception)
-          results[i] = val
-          n = n - 1
+        if n > 0
+          if !isa(val, Exception)
+            results[i] = val
+            n = n - 1
 
-          if n == 0
-            fulfill!(r, results)
+            if n == 0
+              fulfill!(r, results)
+            end
+          else
+            fulfill!(r, val)
+            n = 0
           end
-        else
-          fulfill!(r, val)
         end
     end
 
