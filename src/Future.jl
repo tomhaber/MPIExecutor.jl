@@ -41,6 +41,20 @@ function then!(f::Future, continuation::Function)
     f2
 end
 
+function then!(f::Future, continuation::RemoteFunction)
+    f2 = Future(f.pool)
+    _then!(f,
+      x -> begin
+        if isa(x, Exception)
+          fulfill!(f2, x)
+        else
+          rf = submit!(f.pool, continuation, x)
+          _then!(rf, x -> fulfill!(f2, x))
+        end
+      end)
+    f2
+end
+
 function fulfill!(f::Future, value::Any)
     @assert !isfulfilled(f)
 
