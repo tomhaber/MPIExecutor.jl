@@ -67,7 +67,7 @@ end
 
 function get!(f::Future)
     while !isfulfilled(f)
-        more_available = run_until!(f.pool)
+        run_until!(f.pool)
     end
 
     if isa(f.data, Exception)

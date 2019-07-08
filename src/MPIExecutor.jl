@@ -128,11 +128,17 @@ function run!(pool::MPIPoolExecutor)
 end
 
 function run_until!(pool::MPIPoolExecutor)
-    if isempty(pool.runnable) && all_idle(pool)
-      return nothing
-    end
+    run_until!(pool, () -> false)
+end
 
-    if isempty(pool.slaves) && !isempty(pool.runnable)
+function run_until!(pool::MPIPoolExecutor, pull::Function)
+    if isempty(pool.slaves) 
+        # master-only mode
+        if isempty(pool.runnable) && ! pull()
+            return nothing
+        end
+
+        @assert !isempty(pool.runnable)
         todo = pop!(pool.runnable)
         fulfill!(todo.fut, todo.f(todo.args...))
     else
@@ -141,7 +147,15 @@ function run_until!(pool::MPIPoolExecutor)
             dispatch!(pool, todo, pop!(pool.idle))
         end
 
-        wait_any!(pool)
+        while !isempty(pool.idle) && pull()
+            @assert !isempty(pool.runnable)
+            todo = pop!(pool.runnable)
+            dispatch!(pool, todo, pop!(pool.idle))
+        end
+
+        if !all_idle(pool)
+            wait_any!(pool)
+        end
     end
 end
 
