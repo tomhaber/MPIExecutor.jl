@@ -1,16 +1,34 @@
 module MPIExecutor
 
 using Serialization
+using MPI
 
 import Base: size, get!
 
 include("MPIUtils.jl")
 include("RemoteFunction.jl")
+include("worker.jl")
+
+macro prof(name::Symbol, ex)
+	if true
+			quote
+					local elapsedtime = time_ns()
+					local val = $(esc(ex))
+					elapsedtime = time_ns() - elapsedtime
+					println($(String(name))," ", elapsedtime/1e9)
+					val
+			end
+	else
+			quote
+				$(esc(ex))
+			end
+	end
+end
 
 export MPIPoolExecutor, shutdown!, @remote,
     submit!, run!, run_until!, then!,
     fulfill!, whenall!, get!,
-    run_broadcast!
+    run_broadcast!, main_worker
 
 struct WorkUnit
     f::RemoteFunction
@@ -22,8 +40,6 @@ struct WorkUnit
     end
 end
 
-const slave_path = joinpath(dirname(@__FILE__), "slave.jl")
-
 mutable struct MPIPoolExecutor
     slaves::Array{Int64,1}
     idle::Array{Int64,1}
@@ -33,25 +49,9 @@ mutable struct MPIPoolExecutor
     runnable::Array{WorkUnit,1}
     running::Dict{Int64, WorkUnit}
 
-    function MPIPoolExecutor(worker_count::Int64)
-        start()
-        prep_stop()
-
-        comm =
-            if worker_count > 0
-                MPI.Comm_spawn("julia", [slave_path], worker_count, MPI.COMM_WORLD)
-            else
-                MPI.COMM_WORLD
-            end
-
-        slaves = Int64[i-1 for i in 1:worker_count]
-
-        new(slaves, copy(slaves), comm, 0, 0, WorkUnit[], Dict{Int64, WorkUnit}())
-    end
-
-    function MPIPoolExecutor(comm::MPI.Comm)
+    function MPIPoolExecutor(comm::MPI.Comm=MPI.COMM_WORLD)
       worker_count = MPI.Comm_size(comm) - 1
-      slaves = Int64[i-1 for i in 1:worker_count]
+      slaves = Int64[1:worker_count;]
       new(slaves, copy(slaves), comm, 0, 0, WorkUnit[], Dict{Int64, WorkUnit}())
     end
 end
@@ -71,17 +71,47 @@ function shutdown!(pool::MPIPoolExecutor)
     end
 
     if pool.comm !== MPI.COMM_WORLD
-        MPI.Comm_free(pool.comm)
+        MPI.free(pool.comm)
     end
 end
 
-function MPIPoolExecutor(f::Function, args...)
-  pool = MPIPoolExecutor(args...)
+function MPIPoolExecutor(f::Function, ::Nothing=nothing)
+  if !MPI.Initialized()
+    MPI.Init()
+  end
 
-  try
-    f(pool)
-  finally
-    shutdown!(pool)
+  @assert !MPI.Finalized()
+  MPIPoolExecutor(f, MPI.COMM_WORLD)
+end
+
+function MPIPoolExecutor(f::Function, worker_count::Int64, comm=MPI.COMM_WORLD)
+  if !MPI.Initialized()
+    MPI.Init()
+  end
+
+  @assert !MPI.Finalized()
+
+  if MPI.Comm_size(comm) <= worker_count
+    additional_workers = worker_count - MPI.Comm_size(comm) + 1
+    intercomm = MPI.Comm_spawn("julia", ["-e", "import MPIExecutor; MPIExecutor.main_worker()"], additional_workers, MPI.COMM_WORLD)
+    comm = MPI.Intercomm_merge(intercomm, false)
+  end
+
+  @assert MPI.Comm_size(comm) == worker_count + 1
+  MPIPoolExecutor(f, comm)
+end
+
+function MPIPoolExecutor(f::Function, comm::MPI.Comm)
+  if MPI.Comm_rank(comm) == 0
+    pool = MPIPoolExecutor(comm)
+
+    try
+      f(pool)
+    finally
+      shutdown!(pool)
+    end
+  else
+    main_worker(comm)
   end
 end
 
@@ -132,7 +162,7 @@ function run_until!(pool::MPIPoolExecutor)
 end
 
 function run_until!(pool::MPIPoolExecutor, pull::Function)
-    if isempty(pool.slaves) 
+    if isempty(pool.slaves)
         # master-only mode
         if isempty(pool.runnable) && ! pull()
             return nothing
@@ -171,7 +201,7 @@ function handle_recv!(pool::MPIPoolExecutor, s::MPI.Status)
 end
 
 function receive_any!(pool::MPIPoolExecutor)
-    result, s = MPI.Iprobe(MPI.ANY_SOURCE, 0, pool.comm)
+    result, s = MPI.Iprobe(MPI.MPI_ANY_SOURCE, 0, pool.comm)
     if result
       handle_recv!(pool, s)
     else
@@ -180,7 +210,7 @@ function receive_any!(pool::MPIPoolExecutor)
 end
 
 function wait_any!(pool::MPIPoolExecutor)
-    s = MPI.Probe(MPI.ANY_SOURCE, 0, pool.comm)
+    s = MPI.Probe(MPI.MPI_ANY_SOURCE, 0, pool.comm)
     handle_recv!(pool, s)
 end
 
