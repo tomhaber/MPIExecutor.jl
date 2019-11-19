@@ -5,7 +5,6 @@ using MPI
 
 import Base: size, get!
 
-include("MPIUtils.jl")
 include("RemoteFunction.jl")
 include("worker.jl")
 
