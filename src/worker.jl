@@ -1,28 +1,41 @@
+function receive_msg(comm::MPI.Comm)
+    s = MPI.Probe(0, MPI.MPI_ANY_TAG, comm)
+    count = MPI.Get_count(s, UInt8)
+    recv_mesg = Array{UInt8}(undef, count)
+    status = MPI.Recv!(recv_mesg, 0, MPI.Get_tag(s), comm)
+    tag = MPI.Get_tag(status)
+    io = IOBuffer(recv_mesg)
+    tag, io
+end
+
 function run_worker(comm::MPI.Comm, funcs::Vector{Union{Function, Nothing}})
     while true
-        s = MPI.Probe(0, MPI.MPI_ANY_TAG, comm)
-        count = MPI.Get_count(s, UInt8)
-        recv_mesg = Array{UInt8}(undef, count)
-        status = MPI.Recv!(recv_mesg, 0, MPI.Get_tag(s), comm)
-        tag = MPI.Get_tag(status)
-        io = IOBuffer(recv_mesg)
+        tag, io = receive_msg(comm)
+
         if tag == 1
-            id = deserialize(io)
+            id = deserialize(io)::Int64
+            f = deserialize(io)::Function
+
             while size(funcs, 1) < id
                 push!(funcs, nothing)
             end
-            ex = deserialize(io)
-            funcs[id] = Main.eval(ex)
+            funcs[id] = f
             return true
         elseif tag == 2
             return false
-        else
-            id = tag - 4
-            tracker_id = deserialize(io)
+        else tag == 3
+            id = deserialize(io)::Union{Function, Int64}
+            tracker_id = deserialize(io)::Int64
             args = deserialize(io)
 
+            f = if isa(id, Function)
+              id
+            else
+              funcs[id]
+            end
+
             r = try
-              funcs[id](args...)
+              f(args...)
             catch e
               e
             end
@@ -36,22 +49,22 @@ function run_worker(comm::MPI.Comm, funcs::Vector{Union{Function, Nothing}})
 end
 
 function main_worker(comm::MPI.Comm=MPI.COMM_WORLD)
-  if !MPI.Initialized()
-    MPI.Init()
-  end
+    if !MPI.Initialized()
+        MPI.Init()
+    end
 
-  @assert !MPI.Finalized()
+    @assert !MPI.Finalized()
 
-  comm = if MPI.Comm_get_parent() == MPI.COMM_NULL
-    comm
-  else
-    MPI.Intercomm_merge(MPI.Comm_get_parent(), true)
-  end
+    comm = if MPI.Comm_get_parent() == MPI.COMM_NULL
+        comm
+    else
+        MPI.Intercomm_merge(MPI.Comm_get_parent(), true)
+    end
 
-  funcs = Union{Function, Nothing}[]
+    funcs = Union{Function, Nothing}[]
 
-  ret = true
-  while ret
-    ret = Base.invokelatest(run_worker, comm, funcs)
-  end
+    ret = true
+    while ret
+      ret = Base.invokelatest(run_worker, comm, funcs)
+    end
 end

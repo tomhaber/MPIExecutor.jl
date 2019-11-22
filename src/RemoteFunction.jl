@@ -1,4 +1,4 @@
-struct RemoteFunction
+struct RemoteFunction <: Function
     remote_identifier::Int64
     local_function::Function
 
@@ -11,7 +11,8 @@ end
 
 macro remote(pool, ex)
     quote
-        remote_identifier = register!($(esc(pool)), $(QuoteNode(ex)))
-        RemoteFunction(remote_identifier, $(esc(ex)))
+        register!($(esc(pool)), $(esc(ex)))
     end
 end
+
+Serialization.serialize(s::AbstractSerializer, rf::RemoteFunction) = serialize(s, rf.remote_identifier)

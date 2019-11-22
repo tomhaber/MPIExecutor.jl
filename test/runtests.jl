@@ -1,51 +1,51 @@
-module MPIExecutorTest
-
 using MPIExecutor
 using Test
 
 @testset "Start and shutdown" begin
-    pool = MPIPoolExecutor(1)
-
-    @test size(pool) == 1
-    shutdown!(pool)
+    MPIPoolExecutor(1) do pool
+        @test size(pool) == 1
+    end
 end
 
 @testset "Empty pool" begin
-    pool = MPIPoolExecutor(0)
+    MPIPoolExecutor(0) do pool
+        @test size(pool) == 1 # master behaves as slave
+    end
+end
 
-    @test size(pool) == 1 # master behaves as slave
-    shutdown!(pool)
+@testset "Simple call once" begin
+    MPIPoolExecutor(1) do pool
+        x = submit!(pool, identity, 123)
+        @test get!(x) == 123
+        run!(pool)
+    end
 end
 
 @testset "Simple remote once" begin
-    pool = MPIPoolExecutor(1)
+    MPIPoolExecutor(1) do pool
+        test = @remote pool function()
+            123
+        end
 
-    test = @remote pool function()
-        123
+        x = submit!(pool, test)
+
+        @test get!(x) == 123
+
+        run!(pool)
     end
-
-    x = submit!(pool, test)
-
-    @test get!(x) == 123
-
-    run!(pool)
-
-    shutdown!(pool)
 end
 
 @testset "Run everywhere" begin
     worker_count = 2
-    pool = MPIPoolExecutor(worker_count)
+    MPIPoolExecutor(worker_count) do pool
+        test = @remote pool function()
+            123
+        end
 
-    test = @remote pool function()
-        123
+        x = run_broadcast!(pool, test)
+
+        @test get!(x) == [123, 123]
     end
-
-    x = run_broadcast!(pool, test)
-
-    @test get!(x) == [123, 123]
-
-    shutdown!(pool)
 end
 
 @testset "Futures: whenall" begin
@@ -88,6 +88,4 @@ end
         fut = then!(fut, g)
         @test_throws ErrorException get!(fut)
     end
-end
-
 end

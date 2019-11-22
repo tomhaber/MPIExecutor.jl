@@ -30,7 +30,7 @@ export MPIPoolExecutor, shutdown!, @remote,
     run_broadcast!, main_worker
 
 struct WorkUnit
-    f::RemoteFunction
+    f::Function
     args::Tuple
     fut
 
@@ -75,51 +75,69 @@ function shutdown!(pool::MPIPoolExecutor)
 end
 
 function MPIPoolExecutor(f::Function, ::Nothing=nothing)
-  if !MPI.Initialized()
-    MPI.Init()
-  end
+    if !MPI.Initialized()
+        MPI.Init()
+    end
 
-  @assert !MPI.Finalized()
-  MPIPoolExecutor(f, MPI.COMM_WORLD)
+    @assert !MPI.Finalized()
+    MPIPoolExecutor(f, MPI.COMM_WORLD)
 end
 
 function MPIPoolExecutor(f::Function, worker_count::Int64, comm=MPI.COMM_WORLD)
-  if !MPI.Initialized()
-    MPI.Init()
-  end
+    if !MPI.Initialized()
+        MPI.Init()
+    end
 
-  @assert !MPI.Finalized()
+    @assert !MPI.Finalized()
 
-  if MPI.Comm_size(comm) <= worker_count
-    additional_workers = worker_count - MPI.Comm_size(comm) + 1
-    intercomm = MPI.Comm_spawn("julia", ["-e", "import MPIExecutor; MPIExecutor.main_worker()"], additional_workers, MPI.COMM_WORLD)
-    comm = MPI.Intercomm_merge(intercomm, false)
-  end
+    if MPI.Comm_size(comm) <= worker_count
+        additional_workers = worker_count - MPI.Comm_size(comm) + 1
+        intercomm = MPI.Comm_spawn("julia", ["-e", "import MPIExecutor; MPIExecutor.main_worker()"], additional_workers, MPI.COMM_WORLD)
+        comm = MPI.Intercomm_merge(intercomm, false)
+    end
 
-  @assert MPI.Comm_size(comm) == worker_count + 1
-  MPIPoolExecutor(f, comm)
+    @assert MPI.Comm_size(comm) == worker_count + 1
+    MPIPoolExecutor(f, comm)
 end
 
 function MPIPoolExecutor(f::Function, comm::MPI.Comm)
-  if MPI.Comm_rank(comm) == 0
-    pool = MPIPoolExecutor(comm)
+    if MPI.Comm_rank(comm) == 0
+        pool = MPIPoolExecutor(comm)
 
-    try
-      f(pool)
-    finally
-      shutdown!(pool)
+        try
+        f(pool)
+        finally
+        shutdown!(pool)
+        end
+    else
+        main_worker(comm)
     end
-  else
-    main_worker(comm)
-  end
 end
 
-function register!(pool::MPIPoolExecutor, expression::Expr)
+function is_anon_function(f::Function)
+    t = typeof(f)
+    tn = t.name
+    if isdefined(tn, :mt)
+        name = tn.mt.name
+        mod = tn.module
+        return mod === Main && # only Main
+            t.super === Function && # only Functions
+            unsafe_load(Base.unsafe_convert(Ptr{UInt8}, tn.name)) == UInt8('#') && # hidden type
+            (!isdefined(mod, name) || t != typeof(getfield(mod, name))) # XXX: 95% accurate test for this being an inner function
+            # TODO: more accurate test? (tn.name !== "#" name)
+    end
+    return false
+end
+
+register!(pool::MPIPoolExecutor, x::Function...) = map(f -> register!(pool, f), x)
+
+function register!(pool::MPIPoolExecutor, f::Function)
+    @assert is_anon_function(f)
     rid = (pool.identifier += 1)
 
     io = IOBuffer()
     serialize(io, rid)
-    serialize(io, expression)
+    serialize(io, f)
 
     buf = io.data[1:io.size]
 
@@ -127,10 +145,10 @@ function register!(pool::MPIPoolExecutor, expression::Expr)
         MPI.Send(buf, worker, 1, pool.comm)
     end
 
-    rid
+    RemoteFunction(rid, f)
 end
 
-function submit!(pool::MPIPoolExecutor, f::RemoteFunction, args...)
+function submit!(pool::MPIPoolExecutor, f::Function, args...)
     t = WorkUnit(f, args, Future(pool))
     push!(pool.runnable, t)
     t.fut
@@ -218,14 +236,14 @@ function dispatch!(pool::MPIPoolExecutor, work::WorkUnit, worker)
 
     tracker_id = (pool.tracker += 1)
     pool.running[tracker_id] = work
+    serialize(io, work.f)
     serialize(io, tracker_id)
     serialize(io, work.args)
 
-    id = work.f.remote_identifier
-    MPI.Send(io.data[1:io.size], worker, 4 + id, pool.comm)
+    MPI.Send(io.data[1:io.size], worker, 3, pool.comm)
 end
 
-function run_broadcast!(pool::MPIPoolExecutor, f::RemoteFunction, args...)
+function run_broadcast!(pool::MPIPoolExecutor, f::Function, args...)
     @assert all_idle(pool)
 
     if !isempty(pool.slaves)
