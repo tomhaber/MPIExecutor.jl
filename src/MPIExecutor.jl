@@ -94,10 +94,24 @@ function MPIPoolExecutor(f::Function, worker_count::Int64, comm=MPI.COMM_WORLD)
         additional_workers = worker_count - MPI.Comm_size(comm) + 1
         intercomm = MPI.Comm_spawn("julia", ["-e", "import MPIExecutor; MPIExecutor.main_worker()"], additional_workers, MPI.COMM_WORLD)
         comm = MPI.Intercomm_merge(intercomm, false)
+        @assert MPI.Comm_size(comm) == worker_count + 1
+        MPIPoolExecutor(f, comm)
+    elseif MPI.Comm_size(comm) == worker_count + 1
+        MPIPoolExecutor(f, comm)
+    else
+        rank = MPI.Comm_rank(comm)
+        color = (rank <= worker_count) ? 0 : 1
+        subset_comm = MPI.Comm_split(comm, color, rank)
+
+        ret = if color == 0
+            MPIPoolExecutor(f, subset_comm) 
+        else
+            nothing
     end
 
-    @assert MPI.Comm_size(comm) == worker_count + 1
-    MPIPoolExecutor(f, comm)
+        MPI.Barrier(comm)
+        ret
+    end
 end
 
 function MPIPoolExecutor(f::Function, comm::MPI.Comm)
