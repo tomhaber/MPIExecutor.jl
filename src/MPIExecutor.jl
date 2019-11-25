@@ -27,7 +27,7 @@ end
 export MPIPoolExecutor, shutdown!, @remote,
     submit!, run!, run_until!, then!,
     fulfill!, whenall!, get!,
-    run_broadcast!, main_worker
+    run_broadcast!, main_worker, @everywhere
 
 struct WorkUnit
     f::Function
@@ -146,22 +146,36 @@ end
 
 register!(pool::MPIPoolExecutor, x::Function...) = map(f -> register!(pool, f), x)
 
+function send_to_workers(pool::MPIPoolExecutor, tag, args...)
+    io = pool.io
+    seek(io, 0)
+
+    for x in args
+      serialize(io, x)
+    end
+
+    buf = view(io.data, 1:io.size)
+    for worker in pool.slaves
+        MPI.Send(buf, worker, tag, pool.comm)
+    end
+end
+
 function register!(pool::MPIPoolExecutor, f::Function)
     @assert is_anon_function(f)
     rid = (pool.identifier += 1)
 
-    io = pool.io
-    seek(io, 0)
-
-    serialize(io, rid)
-    serialize(io, f)
-
-    buf = view(io.data, 1:io.size)
-    for worker in pool.slaves
-        MPI.Send(buf, worker, 1, pool.comm)
-    end
-
+    send_to_workers(pool, 1, rid, f)
     RemoteFunction(rid, f)
+end
+
+macro everywhere(pool, ex::Expr)
+  quote
+    eval!($(esc(pool)), $(QuoteNode(ex)))
+  end
+end
+
+function eval!(pool::MPIPoolExecutor, ex::Expr)
+    send_to_workers(pool, 0, ex)
 end
 
 function submit!(pool::MPIPoolExecutor, f::Function, args...)

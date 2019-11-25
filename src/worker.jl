@@ -12,7 +12,11 @@ function run_worker(comm::MPI.Comm, funcs::Vector{Union{Function, Nothing}})
     while true
         tag, io = receive_msg(comm)
 
-        if tag == 1
+        if tag == 0
+            ex = deserialize(io)::Expr
+            Main.eval(ex)
+            return true
+        elseif tag == 1
             id = deserialize(io)::Int64
             f = deserialize(io)::Function
 
