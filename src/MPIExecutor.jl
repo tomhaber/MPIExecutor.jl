@@ -47,11 +47,12 @@ mutable struct MPIPoolExecutor
     tracker::Int64
     runnable::Array{WorkUnit,1}
     running::Dict{Int64, WorkUnit}
+    io::IOBuffer
 
     function MPIPoolExecutor(comm::MPI.Comm=MPI.COMM_WORLD)
       worker_count = MPI.Comm_size(comm) - 1
       slaves = Int64[1:worker_count;]
-      new(slaves, copy(slaves), comm, 0, 0, WorkUnit[], Dict{Int64, WorkUnit}())
+      new(slaves, copy(slaves), comm, 0, 0, WorkUnit[], Dict{Int64, WorkUnit}(), IOBuffer())
     end
 end
 
@@ -104,10 +105,10 @@ function MPIPoolExecutor(f::Function, worker_count::Int64, comm=MPI.COMM_WORLD)
         subset_comm = MPI.Comm_split(comm, color, rank)
 
         ret = if color == 0
-            MPIPoolExecutor(f, subset_comm) 
+            MPIPoolExecutor(f, subset_comm)
         else
             nothing
-    end
+        end
 
         MPI.Barrier(comm)
         ret
@@ -149,12 +150,13 @@ function register!(pool::MPIPoolExecutor, f::Function)
     @assert is_anon_function(f)
     rid = (pool.identifier += 1)
 
-    io = IOBuffer()
+    io = pool.io
+    seek(io, 0)
+
     serialize(io, rid)
     serialize(io, f)
 
-    buf = io.data[1:io.size]
-
+    buf = view(io.data, 1:io.size)
     for worker in pool.slaves
         MPI.Send(buf, worker, 1, pool.comm)
     end
@@ -223,9 +225,14 @@ end
 function handle_recv!(pool::MPIPoolExecutor, s::MPI.Status)
     received_from = MPI.Get_source(s)
     count = MPI.Get_count(s, UInt8)
-    recv_mesg = Array{UInt8}(undef, count)
-    MPI.Recv!(recv_mesg, received_from, 0, pool.comm)
-    io = IOBuffer(recv_mesg)
+
+    io = pool.io
+    Base.ensureroom(io, count)
+
+    MPI.Recv!(io.data, received_from, 0, pool.comm)
+    io.size = count
+    seek(io, 0)
+
     tracker_id = deserialize(io)
     push!(pool.idle, received_from)
     fulfill!(pool.running[tracker_id].fut, deserialize(io))
@@ -246,7 +253,8 @@ function wait_any!(pool::MPIPoolExecutor)
 end
 
 function dispatch!(pool::MPIPoolExecutor, work::WorkUnit, worker)
-    io = IOBuffer()
+    io = pool.io
+    seek(io, 0)
 
     tracker_id = (pool.tracker += 1)
     pool.running[tracker_id] = work
@@ -254,7 +262,8 @@ function dispatch!(pool::MPIPoolExecutor, work::WorkUnit, worker)
     serialize(io, tracker_id)
     serialize(io, work.args)
 
-    MPI.Send(io.data[1:io.size], worker, 3, pool.comm)
+    buf = view(io.data, 1:io.size)
+    MPI.Send(buf, worker, 3, pool.comm)
 end
 
 function run_broadcast!(pool::MPIPoolExecutor, f::Function, args...)
