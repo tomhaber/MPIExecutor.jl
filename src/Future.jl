@@ -1,13 +1,13 @@
 
 mutable struct Future
-    pool::MPIPoolExecutor
+    pool::BaseExecutor
     data::Union{Nothing, Some, Exception}
     continuation::Union{Nothing, Function}
     function Future(f::Future)
         f
     end
 
-    function Future(pool::MPIPoolExecutor, data::Any = nothing)
+    function Future(pool::BaseExecutor, data::Any = nothing)
         new(pool, data, nothing)
     end
 end

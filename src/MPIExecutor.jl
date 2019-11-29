@@ -29,17 +29,21 @@ export MPIPoolExecutor, shutdown!, @remote,
     fulfill!, whenall!, get!,
     run_broadcast!, main_worker, @everywhere
 
+abstract type BaseExecutor end
+
+include("Future.jl")
+
 struct WorkUnit
     f::Function
     args::Tuple
-    fut
+    fut::Future
 
     function WorkUnit(f, args, fut)
         new(f, args, fut)
     end
 end
 
-mutable struct MPIPoolExecutor
+mutable struct MPIPoolExecutor <: BaseExecutor
     slaves::Array{Int64,1}
     idle::Array{Int64,1}
     comm::MPI.Comm
@@ -55,8 +59,6 @@ mutable struct MPIPoolExecutor
       new(slaves, copy(slaves), comm, 0, 0, WorkUnit[], Dict{Int64, WorkUnit}(), IOBuffer())
     end
 end
-
-include("Future.jl")
 
 Base.size(pool::MPIPoolExecutor) = isempty(pool.slaves) ? 1 : length(pool.slaves)
 
@@ -243,13 +245,13 @@ function handle_recv!(pool::MPIPoolExecutor, s::MPI.Status)
     io = pool.io
     Base.ensureroom(io, count)
 
-    MPI.Recv!(io.data, received_from, 0, pool.comm)
+    MPI.Recv!(io.data, count, received_from, 0, pool.comm)
     io.size = count
     seek(io, 0)
 
-    tracker_id = deserialize(io)
+    tracker_id = deserialize(io)::Int64
     push!(pool.idle, received_from)
-    fulfill!(pool.running[tracker_id].fut, deserialize(io))
+    fulfill!(pool.running[tracker_id].fut, deserialize(io)::Any)
 end
 
 function receive_any!(pool::MPIPoolExecutor)
