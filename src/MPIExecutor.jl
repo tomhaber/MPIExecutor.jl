@@ -177,7 +177,11 @@ macro everywhere(pool, ex::Expr)
 end
 
 function eval!(pool::MPIPoolExecutor, ex::Expr)
-    send_to_workers(pool, 0, ex)
+    if isempty(pool.slaves)
+        Main.eval(ex)
+    else
+        send_to_workers(pool, 0, ex)
+    end
 end
 
 function submit!(pool::MPIPoolExecutor, f::Function, args...)
