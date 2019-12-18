@@ -25,7 +25,7 @@ macro prof(name::Symbol, ex)
 end
 
 export MPIPoolExecutor, shutdown!, @remote,
-    submit!, run!, run_until!, then!,
+    submit!, run!, run_until!, then!, finally!,
     fulfill!, whenall!, get!,
     run_broadcast!, main_worker, @everywhere
 

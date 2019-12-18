@@ -25,6 +25,8 @@ function _then!(f::Future, continuation::Function)
     end
 end
 
+finally!(f::Future, continuation::Function) = _then!(f, continuation)
+
 function then!(f::Future, continuation::Function)
     f2 = Future(f.pool)
     _then!(f,
