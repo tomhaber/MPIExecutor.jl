@@ -1,16 +1,23 @@
-function receive_msg(comm::MPI.Comm)
+function receive_msg!(io::IOBuffer, comm::MPI.Comm)
     s = MPI.Probe(0, MPI.MPI_ANY_TAG, comm)
     count = MPI.Get_count(s, UInt8)
-    recv_mesg = Array{UInt8}(undef, count)
-    status = MPI.Recv!(recv_mesg, 0, MPI.Get_tag(s), comm)
-    tag = MPI.Get_tag(status)
-    io = IOBuffer(recv_mesg)
-    tag, io
+    Base.ensureroom(io, count)
+
+    tag = MPI.Get_tag(s)
+    received_from = MPI.Get_source(s)
+
+    MPI.Recv!(io.data, count, received_from, tag, comm)
+    io.size = count
+    seek(io, 0)
+
+    tag
 end
 
 function run_worker(comm::MPI.Comm, funcs::Vector{Union{Function, Nothing}})
+    io = IOBuffer()
+
     while true
-        tag, io = receive_msg(comm)
+        tag = receive_msg!(io, comm)
 
         if tag == 0
             ex = deserialize(io)::Expr
@@ -44,10 +51,10 @@ function run_worker(comm::MPI.Comm, funcs::Vector{Union{Function, Nothing}})
               e
             end
 
-            io = IOBuffer()
+            seek(io, 0)
             serialize(io, tracker_id)
             serialize(io, r)
-            MPI.Send(io.data[1:io.size], 0, 0, comm)
+            MPI.Send(io.data, io.size, 0, 0, comm)
         end
     end
 end

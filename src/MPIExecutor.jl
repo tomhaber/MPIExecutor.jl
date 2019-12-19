@@ -67,9 +67,9 @@ function shutdown!(pool::MPIPoolExecutor)
         wait_any!(pool)
     end
 
+    io = IOBuffer()
     for worker in pool.slaves
-        io = IOBuffer()
-        MPI.Send(io.data[1:io.size], worker, 2, pool.comm)
+        MPI.Send(io.data, io.size, worker, 2, pool.comm)
     end
 
     if pool.comm !== MPI.COMM_WORLD
@@ -156,9 +156,8 @@ function send_to_workers(pool::MPIPoolExecutor, tag, args...)
       serialize(io, x)
     end
 
-    buf = view(io.data, 1:io.size)
     for worker in pool.slaves
-        MPI.Send(buf, worker, tag, pool.comm)
+        MPI.Send(io.data, io.size, worker, tag, pool.comm)
     end
 end
 
@@ -282,8 +281,7 @@ function dispatch!(pool::MPIPoolExecutor, work::WorkUnit, worker)
     serialize(io, tracker_id)
     serialize(io, work.args)
 
-    buf = view(io.data, 1:io.size)
-    MPI.Send(buf, worker, 3, pool.comm)
+    MPI.Send(io.data, io.size, worker, 3, pool.comm)
 end
 
 function run_broadcast!(pool::MPIPoolExecutor, f::Function, args...)
