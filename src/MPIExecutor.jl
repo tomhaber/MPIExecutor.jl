@@ -67,9 +67,12 @@ function shutdown!(pool::MPIPoolExecutor)
         wait_any!(pool)
     end
 
-    io = IOBuffer()
+    io = pool.io
+    seek(io, 0)
+
+    buf = MPI.Buffer(io.data, io.size, MPI.Datatype(UInt8))
     for worker in pool.slaves
-        MPI.Send(io.data, io.size, worker, 2, pool.comm)
+        MPI.Send(buf, worker, 2, pool.comm)
     end
 end
 
@@ -155,8 +158,9 @@ function send_to_workers(pool::MPIPoolExecutor, tag, args...)
       serialize(io, x)
     end
 
+    buf = MPI.Buffer(io.data, io.size, MPI.Datatype(UInt8))
     for worker in pool.slaves
-        MPI.Send(io.data, io.size, worker, tag, pool.comm)
+        MPI.Send(buf, worker, tag, pool.comm)
     end
 end
 
@@ -247,7 +251,8 @@ function handle_recv!(pool::MPIPoolExecutor, s::MPI.Status)
     io = pool.io
     Base.ensureroom(io, count)
 
-    MPI.Recv!(io.data, count, received_from, 0, pool.comm)
+    buf = MPI.Buffer(io.data, count, MPI.Datatype(UInt8))
+    MPI.Recv!(buf, received_from, 0, pool.comm)
     io.size = count
     seek(io, 0)
 
@@ -280,7 +285,8 @@ function dispatch!(pool::MPIPoolExecutor, work::WorkUnit, worker)
     serialize(io, tracker_id)
     serialize(io, work.args)
 
-    MPI.Send(io.data, io.size, worker, 3, pool.comm)
+    buf = MPI.Buffer(io.data, io.size, MPI.Datatype(UInt8))
+    MPI.Send(buf, worker, 3, pool.comm)
 end
 
 function run_broadcast!(pool::MPIPoolExecutor, f::Function, args...)
