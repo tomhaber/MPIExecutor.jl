@@ -32,6 +32,7 @@ export MPIPoolExecutor, shutdown!, @remote,
 abstract type BaseExecutor end
 
 include("Future.jl")
+include("pmap.jl")
 
 struct WorkUnit
     f::Function
@@ -195,6 +196,8 @@ end
 function all_idle(pool::MPIPoolExecutor)
     length(pool.idle) == length(pool.slaves)
 end
+
+resources_available(pool::MPIPoolExecutor) = !isempty(pool.idle)
 
 function run!(pool::MPIPoolExecutor)
     if isempty(pool.slaves) && !isempty(pool.runnable)
