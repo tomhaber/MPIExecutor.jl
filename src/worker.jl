@@ -78,4 +78,11 @@ function main_worker(comm::MPI.Comm=MPI.COMM_WORLD)
     while ret
       ret = Base.invokelatest(run_worker, comm, funcs)
     end
+
+     # free the merged intercomm https://github.com/open-mpi/ompi/issues/8426
+    if MPI.Comm_get_parent() != MPI.COMM_NULL
+        MPI.free(comm)
+    end
+
+    nothing
 end

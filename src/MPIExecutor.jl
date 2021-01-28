@@ -71,10 +71,6 @@ function shutdown!(pool::MPIPoolExecutor)
     for worker in pool.slaves
         MPI.Send(io.data, io.size, worker, 2, pool.comm)
     end
-
-    if pool.comm !== MPI.COMM_WORLD
-        MPI.free(pool.comm)
-    end
 end
 
 function MPIPoolExecutor(f::Function, ::Nothing=nothing)
@@ -95,10 +91,13 @@ function MPIPoolExecutor(f::Function, worker_count::Int64, comm=MPI.COMM_WORLD)
 
     if MPI.Comm_size(comm) <= worker_count
         additional_workers = worker_count - MPI.Comm_size(comm) + 1
-        intercomm = MPI.Comm_spawn("julia", ["-e", "import MPIExecutor; MPIExecutor.main_worker()"], additional_workers, MPI.COMM_WORLD)
+        intercomm = MPI.Comm_spawn("julia", ["-e", "import MPIExecutor; MPIExecutor.main_worker()"], additional_workers, comm)
         comm = MPI.Intercomm_merge(intercomm, false)
         @assert MPI.Comm_size(comm) == worker_count + 1
         MPIPoolExecutor(f, comm)
+
+        # free the merged intercomm https://github.com/open-mpi/ompi/issues/8426
+        MPI.free(comm)
     elseif MPI.Comm_size(comm) == worker_count + 1
         MPIPoolExecutor(f, comm)
     else
@@ -122,9 +121,9 @@ function MPIPoolExecutor(f::Function, comm::MPI.Comm)
         pool = MPIPoolExecutor(comm)
 
         try
-        f(pool)
+          f(pool)
         finally
-        shutdown!(pool)
+          shutdown!(pool)
         end
     else
         main_worker(comm)
