@@ -89,3 +89,15 @@ end
         @test_throws ErrorException get!(fut)
     end
 end
+
+@testset "pforeach" begin
+    MPIPoolExecutor(1) do pool
+        test = @remote pool function(x)
+            x
+        end
+
+        @test pforeach(test, pool, 1:10) === nothing
+    end
+end
+
+
