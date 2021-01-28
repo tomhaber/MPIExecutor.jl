@@ -5,8 +5,9 @@ function receive_msg!(io::IOBuffer, comm::MPI.Comm)
 
     tag = MPI.Get_tag(s)
     received_from = MPI.Get_source(s)
-
-    MPI.Recv!(io.data, count, received_from, tag, comm)
+ 
+    buf = MPI.Buffer(io.data, count, MPI.Datatype(UInt8))
+    MPI.Recv!(buf, received_from, tag, comm)
     io.size = count
     seek(io, 0)
 
@@ -48,13 +49,16 @@ function run_worker(comm::MPI.Comm, funcs::Vector{Union{Function, Nothing}})
             r = try
               f(args...)
             catch e
+              showerror(stdout, e, catch_backtrace())
               e
             end
 
             seek(io, 0)
             serialize(io, tracker_id)
             serialize(io, r)
-            MPI.Send(io.data, io.size, 0, 0, comm)
+
+            buf = MPI.Buffer(io.data, io.size, MPI.Datatype(UInt8))
+            MPI.Send(buf, 0, 0, comm)
         end
     end
 end

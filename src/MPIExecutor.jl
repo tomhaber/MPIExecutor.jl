@@ -67,9 +67,12 @@ function shutdown!(pool::MPIPoolExecutor)
         wait_any!(pool)
     end
 
-    io = IOBuffer()
+    io = pool.io
+    seek(io, 0)
+
+    buf = MPI.Buffer(io.data, io.size, MPI.Datatype(UInt8))
     for worker in pool.slaves
-        MPI.Send(io.data, io.size, worker, 2, pool.comm)
+        MPI.Send(buf, worker, 2, pool.comm)
     end
 end
 
@@ -93,11 +96,13 @@ function MPIPoolExecutor(f::Function, worker_count::Int64, comm=MPI.COMM_WORLD)
         additional_workers = worker_count - MPI.Comm_size(comm) + 1
         intercomm = MPI.Comm_spawn("julia", ["-e", "import MPIExecutor; MPIExecutor.main_worker()"], additional_workers, comm)
         comm = MPI.Intercomm_merge(intercomm, false)
-        @assert MPI.Comm_size(comm) == worker_count + 1
-        MPIPoolExecutor(f, comm)
-
-        # free the merged intercomm https://github.com/open-mpi/ompi/issues/8426
-        MPI.free(comm)
+        try
+            @assert MPI.Comm_size(comm) == worker_count + 1
+            MPIPoolExecutor(f, comm)
+        finally
+            # free the merged intercomm https://github.com/open-mpi/ompi/issues/8426
+            MPI.free(comm)
+        end
     elseif MPI.Comm_size(comm) == worker_count + 1
         MPIPoolExecutor(f, comm)
     else
@@ -105,10 +110,14 @@ function MPIPoolExecutor(f::Function, worker_count::Int64, comm=MPI.COMM_WORLD)
         color = (rank <= worker_count) ? 0 : 1
         subset_comm = MPI.Comm_split(comm, color, rank)
 
-        ret = if color == 0
-            MPIPoolExecutor(f, subset_comm)
-        else
-            nothing
+        ret = try
+            if color == 0
+                MPIPoolExecutor(f, subset_comm)
+            else
+                nothing
+            end
+        finally
+            MPI.free(subset_comm)
         end
 
         MPI.Barrier(comm)
@@ -121,9 +130,9 @@ function MPIPoolExecutor(f::Function, comm::MPI.Comm)
         pool = MPIPoolExecutor(comm)
 
         try
-          f(pool)
+            f(pool)
         finally
-          shutdown!(pool)
+            shutdown!(pool)
         end
     else
         main_worker(comm)
@@ -155,8 +164,9 @@ function send_to_workers(pool::MPIPoolExecutor, tag, args...)
       serialize(io, x)
     end
 
+    buf = MPI.Buffer(io.data, io.size, MPI.Datatype(UInt8))
     for worker in pool.slaves
-        MPI.Send(io.data, io.size, worker, tag, pool.comm)
+        MPI.Send(buf, worker, tag, pool.comm)
     end
 end
 
@@ -247,7 +257,8 @@ function handle_recv!(pool::MPIPoolExecutor, s::MPI.Status)
     io = pool.io
     Base.ensureroom(io, count)
 
-    MPI.Recv!(io.data, count, received_from, 0, pool.comm)
+    buf = MPI.Buffer(io.data, count, MPI.Datatype(UInt8))
+    MPI.Recv!(buf, received_from, 0, pool.comm)
     io.size = count
     seek(io, 0)
 
@@ -280,7 +291,8 @@ function dispatch!(pool::MPIPoolExecutor, work::WorkUnit, worker)
     serialize(io, tracker_id)
     serialize(io, work.args)
 
-    MPI.Send(io.data, io.size, worker, 3, pool.comm)
+    buf = MPI.Buffer(io.data, io.size, MPI.Datatype(UInt8))
+    MPI.Send(buf, worker, 3, pool.comm)
 end
 
 function run_broadcast!(pool::MPIPoolExecutor, f::Function, args...)
